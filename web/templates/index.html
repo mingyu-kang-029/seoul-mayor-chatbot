@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2026 서울시장 — 내 관심사로 보는 후보 비교</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════
+       VIEW 1: 필터 폼
+  ═══════════════════════════════════════ -->
+  <div id="view-filter" class="view active">
+    <div class="container">
+
+      <!-- 사이트 헤더 -->
+      <header class="site-header">
+        <span class="election-badge">2026 서울시장 선거</span>
+        <h1>내 관심사로 보는<br>후보 정책 비교</h1>
+        <p class="lead">나의 상황을 입력하면 AI가 관련 정책 분야를 찾고,<br>후보들의 입장과 충돌 지점을 정리해 드립니다.</p>
+      </header>
+
+      <!-- 후보 소개 카드 -->
+      <div id="candidate-intro-grid" class="candidate-intro-grid">
+        <!-- JS로 채워짐 -->
+      </div>
+
+      <!-- ── 필터 폼 ── -->
+      <form id="filter-form" novalidate>
+
+        <!-- 섹션 1: 가장 걱정되는 것 -->
+        <section class="form-section">
+          <div class="section-header">
+            <h2 class="section-title">지금 가장 걱정되는 것은?</h2>
+            <span class="section-badge">1개 선택</span>
+          </div>
+          <div class="concern-grid chip-group" data-key="concern" data-multi="false">
+            <button type="button" class="concern-card chip" data-value="집값·전월세">
+              <span class="concern-title">집값·전월세</span>
+              <span class="concern-sub">주거 정책</span>
+            </button>
+            <button type="button" class="concern-card chip" data-value="일자리·소득">
+              <span class="concern-title">일자리·소득</span>
+              <span class="concern-sub">경제 정책</span>
+            </button>
+            <button type="button" class="concern-card chip" data-value="자녀 교육">
+              <span class="concern-title">자녀 교육</span>
+              <span class="concern-sub">교육 정책</span>
+            </button>
+            <button type="button" class="concern-card chip" data-value="교통 불편">
+              <span class="concern-title">교통 불편</span>
+              <span class="concern-sub">교통 정책</span>
+            </button>
+            <button type="button" class="concern-card chip" data-value="노후·복지">
+              <span class="concern-title">노후·복지</span>
+              <span class="concern-sub">복지 정책</span>
+            </button>
+            <button type="button" class="concern-card chip" data-value="환경·안전">
+              <span class="concern-title">환경·안전</span>
+              <span class="concern-sub">환경·안전 정책</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- 섹션 2: 나의 상황 -->
+        <section class="form-section">
+          <div class="section-header">
+            <h2 class="section-title">나의 상황</h2>
+            <span class="section-badge">선택 사항</span>
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">연령대</label>
+            <div class="chip-group" data-key="age" data-multi="false">
+              <button type="button" class="chip" data-value="20대">20대</button>
+              <button type="button" class="chip" data-value="30대">30대</button>
+              <button type="button" class="chip" data-value="40대">40대</button>
+              <button type="button" class="chip" data-value="50대">50대</button>
+              <button type="button" class="chip" data-value="60대 이상">60대 이상</button>
+            </div>
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">주거 형태</label>
+            <div class="chip-group" data-key="housing" data-multi="false">
+              <button type="button" class="chip" data-value="자가">자가</button>
+              <button type="button" class="chip" data-value="전세">전세</button>
+              <button type="button" class="chip" data-value="월세">월세</button>
+              <button type="button" class="chip" data-value="기숙사·고시원">기숙사·고시원</button>
+              <button type="button" class="chip" data-value="기타">기타</button>
+            </div>
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">고용 형태</label>
+            <div class="chip-group" data-key="employment" data-multi="false">
+              <button type="button" class="chip" data-value="직장인">직장인</button>
+              <button type="button" class="chip" data-value="자영업">자영업</button>
+              <button type="button" class="chip" data-value="프리랜서">프리랜서</button>
+              <button type="button" class="chip" data-value="구직 중">구직 중</button>
+              <button type="button" class="chip" data-value="학생">학생</button>
+              <button type="button" class="chip" data-value="은퇴">은퇴</button>
+            </div>
+          </div>
+
+          <div class="filter-row">
+            <div class="filter-group filter-group--half">
+              <label class="filter-label">자녀 상황</label>
+              <div class="chip-group chip-group--wrap" data-key="children" data-multi="false">
+                <button type="button" class="chip" data-value="없음">없음</button>
+                <button type="button" class="chip" data-value="영유아 자녀">영유아</button>
+                <button type="button" class="chip" data-value="초중고생 자녀">초중고생</button>
+                <button type="button" class="chip" data-value="대학생 자녀">대학생</button>
+              </div>
+            </div>
+            <div class="filter-group filter-group--half">
+              <label class="filter-label">주요 이동 수단</label>
+              <div class="chip-group chip-group--wrap" data-key="commute" data-multi="false">
+                <button type="button" class="chip" data-value="지하철·버스">지하철·버스</button>
+                <button type="button" class="chip" data-value="자가용">자가용</button>
+                <button type="button" class="chip" data-value="자전거·도보">자전거·도보</button>
+                <button type="button" class="chip" data-value="주로 재택">재택</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 섹션 3: 세부 관심 분야 -->
+        <section class="form-section">
+          <div class="section-header">
+            <h2 class="section-title">세부 관심 분야</h2>
+            <span class="section-badge">복수 선택</span>
+          </div>
+          <div class="chip-group chip-group--wrap" data-key="values" data-multi="true">
+            <button type="button" class="chip" data-value="주택/부동산">주택·부동산</button>
+            <button type="button" class="chip" data-value="교통/인프라">교통·인프라</button>
+            <button type="button" class="chip" data-value="경제/일자리">경제·일자리</button>
+            <button type="button" class="chip" data-value="교육">교육</button>
+            <button type="button" class="chip" data-value="환경/기후">환경·기후</button>
+            <button type="button" class="chip" data-value="복지">복지</button>
+            <button type="button" class="chip" data-value="안전">안전</button>
+            <button type="button" class="chip" data-value="행정/거버넌스">행정개혁</button>
+            <button type="button" class="chip" data-value="문화/관광">문화·관광</button>
+            <button type="button" class="chip" data-value="청년">청년 정책</button>
+          </div>
+        </section>
+
+        <!-- 섹션 4: 자유 입력 -->
+        <section class="form-section">
+          <div class="section-header">
+            <h2 class="section-title">더 하고 싶은 말</h2>
+            <span class="section-badge">선택 사항</span>
+          </div>
+          <p class="help-text">나의 상황이나 관심사를 자유롭게 적으면 분석이 더 정확해집니다.</p>
+          <textarea
+            id="freetext"
+            rows="3"
+            placeholder="예: 재건축 예정 구역에 전세로 살고 있어요. 이주 대책과 임대료 안정이 가장 중요합니다."
+          ></textarea>
+        </section>
+
+        <div class="form-footer">
+          <button type="submit" class="btn-analyze">
+            AI 분석 시작
+            <span class="btn-arrow">→</span>
+          </button>
+          <p class="form-disclaimer">선택하지 않은 항목은 분석에서 제외됩니다.</p>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       VIEW 2: 로딩
+  ═══════════════════════════════════════ -->
+  <div id="view-loading" class="view">
+    <div class="loading-inner">
+      <div class="loading-dots">
+        <span></span><span></span><span></span>
+      </div>
+      <p id="loading-msg" class="loading-msg">관련 정책 분야를 분석하는 중...</p>
+      <p class="loading-sub">AI가 입력하신 정보를 바탕으로<br>가장 관련성 높은 분야를 찾고 있습니다.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       VIEW 3: 결과
+  ═══════════════════════════════════════ -->
+  <div id="view-results" class="view">
+    <div class="container">
+      <header class="results-header">
+        <button id="btn-back" class="btn-back">← 다시 설정하기</button>
+        <div class="results-title-row">
+          <h2 class="results-title">나에게 관련 있는 정책 분야</h2>
+          <span id="data-freshness-badge" class="data-freshness-badge"></span>
+        </div>
+        <p class="results-lead">AI가 분석한 상위 5개 분야입니다. 각 분야를 눌러 후보들의 입장을 비교해 보세요.</p>
+        <p class="data-notice">
+          ※ 후보별 입장 요약은 공약집·유튜브·인터뷰 등 수집된 공식 자료를 AI가 정리한 것입니다.
+          공식 입장이 확인되지 않는 경우 명시됩니다.
+        </p>
+      </header>
+
+      <div id="topics-list" class="topics-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TEMPLATES
+  ═══════════════════════════════════════ -->
+  <template id="tpl-topic-card">
+    <article class="topic-card">
+      <div class="topic-card-header">
+        <div class="topic-meta">
+          <span class="topic-rank"></span>
+          <div class="topic-text">
+            <h3 class="topic-name"></h3>
+            <p class="topic-reason"></p>
+          </div>
+        </div>
+        <button class="topic-toggle-btn" aria-expanded="false">
+          <span class="toggle-label">비교 보기</span>
+          <span class="toggle-icon">↓</span>
+        </button>
+      </div>
+      <div class="topic-content" aria-hidden="true">
+        <div class="topic-content-inner"></div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

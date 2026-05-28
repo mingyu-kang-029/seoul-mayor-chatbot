@@ -1,0 +1,19 @@
+# 환경변수 (절대 커밋 금지)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# 크롤링 원본 데이터 (용량 큼)
+data/raw/
+선거공보/
+후보들\ 이미지\ 사진/
+crawler.log
+
+# OS
+.DS_Store
