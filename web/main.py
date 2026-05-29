@@ -71,6 +71,17 @@ def get_db():
     return conn
 
 
+SOURCE_PRIORITY = {
+    "공약집": 1,
+    "선거공보": 2,
+    "당홈페이지": 3,
+    "토론발언": 4,
+    "언론": 5,
+    "실적": 6,
+    "유튜브": 7,
+}
+
+
 def get_statements_for_topic(topic: str) -> dict:
     conn = get_db()
     rows = conn.execute("""
@@ -79,12 +90,34 @@ def get_statements_for_topic(topic: str) -> dict:
         FROM statements s
         JOIN candidates c ON s.candidate_id = c.id
         WHERE s.topic = ?
-        ORDER BY c.number, s.date DESC
+        ORDER BY c.number,
+                 CASE s.source_type
+                     WHEN '공약집'   THEN 1
+                     WHEN '선거공보' THEN 2
+                     WHEN '당홈페이지' THEN 3
+                     WHEN '토론발언' THEN 4
+                     WHEN '언론'     THEN 5
+                     WHEN '실적'     THEN 6
+                     WHEN '유튜브'   THEN 7
+                     ELSE 8
+                 END,
+                 s.date DESC
     """, (topic,)).fetchall()
     conn.close()
+    # 언론/실적/유튜브처럼 여러 후보가 섞이는 source는 후보 이름 언급 시에만 포함
+    MIXED_SOURCES = {"언론", "실적", "유튜브"}
+
     result = {name: [] for name in CANDIDATE_ORDER}
     for row in rows:
-        result[row["name"]].append(dict(row))
+        d = dict(row)
+        candidate_name = row["name"]
+        source_type = d.get("source_type", "")
+        if source_type in MIXED_SOURCES:
+            text = (d.get("summary") or "") + d["content"]
+            if candidate_name not in text:
+                continue  # 본인 언급 없는 혼합 소스는 제외
+        result[candidate_name].append(d)
+
     return result
 
 
@@ -166,7 +199,7 @@ async def recommend(request: Request):
     prompt += f"""
 {CONCERN_TOPIC_HINT}
 
-아래 10개 정책 분야 중, 이 유권자에게 가장 관련성 높은 5개를 선택하세요.
+아래 10개 정책 분야 중, 이 유권자에게 가장 관련성 높은 3개를 선택하세요.
 '가장 걱정되는 것'이 있다면 그것과 연관된 분야를 반드시 1순위로 포함하세요.
 
 [분야 목록]
@@ -176,8 +209,6 @@ async def recommend(request: Request):
 {{
   "topics": [
     {{"topic": "분야명", "reason": "이 유권자와 관련성 (1문장, 구체적으로)"}},
-    {{"topic": "분야명", "reason": "..."}},
-    {{"topic": "분야명", "reason": "..."}},
     {{"topic": "분야명", "reason": "..."}},
     {{"topic": "분야명", "reason": "..."}}
   ]
@@ -208,14 +239,16 @@ async def compare(request: Request):
     candidate_blocks = []
     has_any_data = False
     for name in CANDIDATE_ORDER:
-        stmts = statements[name][:8]
+        stmts = statements[name][:10]
         if stmts:
             has_any_data = True
             lines = []
             for s in stmts:
-                text = s.get("summary") or s["content"][:300]
+                raw_text = s.get("summary") or s["content"][:400]
+                # JSON 출력 오염 방지: 큰따옴표·역슬래시·제어문자 제거
+                clean_text = raw_text.replace('"', "'").replace('\\', ' ').replace('\r', ' ')
                 src = s.get("source_name") or s.get("source_type", "")
-                lines.append(f"• {text}  [{src}]")
+                lines.append(f"• {clean_text}  [{src}]")
             candidate_blocks.append(
                 f"[{name} / {CANDIDATE_INFO[name]['party']}]\n" + "\n".join(lines)
             )
@@ -259,11 +292,14 @@ async def compare(request: Request):
 분석 지침:
 1. 공식 입장이 없는 후보: has_data=false, stance="수집된 공식 입장이 없습니다." (절대 추측 금지)
 2. 입장 있는 후보 stance: 2-3문장 핵심 요약
-3. clash_points: 입장 있는 후보 간 실제 쟁점, 최대 4개. 각 clash는 두 후보를 비교.
-   - issue: 핵심 쟁점어 4-8자
-   - contrast: 두 접근의 핵심 대립 구도를 "A방식 vs B방식" 형태로 8-16자. 레이블(label)보다 한 단계 추상적인 철학적 차이를 드러낼 것 (예: "직접지원 vs 생태계구축", "공공주도 vs 민간유도")
-   - left/right: 각 후보의 방향 레이블(2-6자)과 한 문장 설명(최대 35자)
-4. clash_summary: 전체 차이 2-3문장. 비교 불가 시 "입장 있는 후보가 충분하지 않습니다."
+3. debate: 입장 있는 후보 각각에 대해, 상대 후보(입장 있는 경우에만)가 논리적으로 어떻게 반박할지 작성.
+   - candidate: 주장하는 후보명
+   - key_claim: 이 후보의 핵심 주장 1문장 (20자 이내)
+   - rebuttals: 다른 후보들의 반박. 입장 없는 후보는 제외.
+     - from: 반박하는 후보명
+     - angle: 반박 각도/관점 레이블 (3-6자, 예: "실효성 의문", "우선순위 오류", "공급 부족 간과")
+     - text: 반박 내용 1-2문장 (실제 정책 입장 차이에 근거, 추측 금지)
+4. clash_summary: 전체 대립 구도 요약 2-3문장.
 5. user_impact: 유권자 프로필이 있을 경우, 이 유권자의 구체적 상황에서 두 후보의 차이가 실제로 어떤 의미인지 2문장으로 서술. 추상적 설명 금지, 반드시 프로필 내용을 언급할 것. 프로필 없으면 빈 문자열 "".
 
 반드시 아래 JSON 형식으로만 응답하세요:
@@ -274,12 +310,13 @@ async def compare(request: Request):
     {{"name": "오세훈", "party": "국민의힘", "stance": "...", "has_data": true}},
     {{"name": "김정철", "party": "개혁신당", "stance": "...", "has_data": false}}
   ],
-  "clash_points": [
+  "debate": [
     {{
-      "issue": "핵심 쟁점어",
-      "contrast": "A방식 vs B방식",
-      "left": {{"name": "후보명", "label": "방향 레이블", "detail": "한 문장 설명"}},
-      "right": {{"name": "다른 후보명", "label": "반대 방향 레이블", "detail": "한 문장 설명"}}
+      "candidate": "정원오",
+      "key_claim": "핵심 주장",
+      "rebuttals": [
+        {{"from": "오세훈", "angle": "반박 각도", "text": "반박 내용"}}
+      ]
     }}
   ],
   "clash_summary": "...",
@@ -289,11 +326,12 @@ async def compare(request: Request):
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2000,
+            max_tokens=4000,
             system="당신은 서울시장 선거 정책 분석가입니다. 후보 입장을 객관적으로 비교합니다. 공식 입장 없는 후보는 절대 추측 금지. JSON만 출력하세요.",
             messages=[{"role": "user", "content": prompt}]
         )
-        result = extract_json(msg.content[0].text)
+        raw = msg.content[0].text
+        result = extract_json(raw)
 
         result["sources"] = {}
         for name in CANDIDATE_ORDER:

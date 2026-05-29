@@ -285,8 +285,8 @@ function renderComparison(topic, container, data) {
   stanceSection.appendChild(grid);
   container.appendChild(stanceSection);
 
-  /* ── 2. 입장 차이 (clash cards) ── */
-  const clashPoints = data.clash_points || [];
+  /* ── 2. 반박 대결 구조 ── */
+  const debateItems = data.debate || [];
   const clashSection = document.createElement('div');
   clashSection.className = 'subsection clash-section';
 
@@ -303,11 +303,11 @@ function renderComparison(topic, container, data) {
     clashSection.appendChild(p);
   }
 
-  if (clashPoints.length > 0) {
-    const cardsWrap = document.createElement('div');
-    cardsWrap.className = 'clash-cards';
-    clashPoints.forEach(cp => cardsWrap.appendChild(buildClashCard(cp)));
-    clashSection.appendChild(cardsWrap);
+  if (debateItems.length > 0) {
+    const debateWrap = document.createElement('div');
+    debateWrap.className = 'debate-wrap';
+    debateItems.forEach(item => debateWrap.appendChild(buildDebateBlock(item)));
+    clashSection.appendChild(debateWrap);
   } else {
     const note = document.createElement('p');
     note.className = 'no-clash-note';
@@ -389,6 +389,63 @@ function buildClashCard(clash) {
     </div>
   `;
   return card;
+}
+
+/* ═══════════════════════════════════════════
+   반박 대결 블록
+═══════════════════════════════════════════ */
+function buildDebateBlock(item) {
+  const candInfo = getCandInfo(item.candidate);
+  const party = candInfo.party || '';
+  const pc = PARTY_COLORS[party] || {};
+
+  const block = document.createElement('div');
+  block.className = 'debate-block';
+
+  // 주장 헤더
+  const claimEl = document.createElement('div');
+  claimEl.className = 'debate-claim';
+  claimEl.style.borderLeftColor = pc.border || '#ccc';
+  claimEl.innerHTML = `
+    <div class="debate-claim-meta">
+      <span class="debate-cand-name" style="color:${pc.label || 'inherit'}">${item.candidate}</span>
+      <span class="debate-cand-party">${party}</span>
+    </div>
+    <p class="debate-key-claim">${item.key_claim || ''}</p>
+  `;
+  block.appendChild(claimEl);
+
+  // 반박 카드들
+  const rebuttals = item.rebuttals || [];
+  if (rebuttals.length > 0) {
+    const rebuttalList = document.createElement('div');
+    rebuttalList.className = 'rebuttal-list';
+    rebuttals.forEach(r => {
+      const rInfo = getCandInfo(r.from);
+      const rParty = rInfo.party || '';
+      const rpc = PARTY_COLORS[rParty] || {};
+
+      const rCard = document.createElement('div');
+      rCard.className = 'rebuttal-card';
+      rCard.innerHTML = `
+        <div class="rebuttal-from">
+          <span class="rebuttal-arrow">↳</span>
+          <span class="rebuttal-name" style="color:${rpc.label || 'inherit'}">${r.from}</span>
+          <span class="rebuttal-angle">${r.angle || ''}</span>
+        </div>
+        <p class="rebuttal-text">${r.text || ''}</p>
+      `;
+      rebuttalList.appendChild(rCard);
+    });
+    block.appendChild(rebuttalList);
+  } else {
+    const noRebuttal = document.createElement('p');
+    noRebuttal.className = 'no-rebuttal-note';
+    noRebuttal.textContent = '다른 후보의 공식 입장이 없어 반박을 구성할 수 없습니다.';
+    block.appendChild(noRebuttal);
+  }
+
+  return block;
 }
 
 /* ═══════════════════════════════════════════

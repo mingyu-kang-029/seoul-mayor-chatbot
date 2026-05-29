@@ -787,6 +787,114 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 /* ═══════════════════════════════════════════
+   반박 대결 구조 (debate)
+═══════════════════════════════════════════ */
+.debate-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.debate-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.debate-claim {
+  border-left: 4px solid #ccc;
+  padding: 14px 16px 12px;
+  background: #fff;
+}
+
+.debate-claim-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.debate-cand-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.debate-cand-party {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.debate-key-claim {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.rebuttal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.rebuttal-card {
+  padding: 12px 16px;
+  background: #FAFAFA;
+  border-top: 1px solid var(--border);
+}
+
+.rebuttal-card:first-child {
+  border-top: none;
+}
+
+.rebuttal-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.rebuttal-arrow {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.rebuttal-name {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rebuttal-angle {
+  font-size: 11px;
+  background: #F0F0F0;
+  color: #555;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+
+.rebuttal-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.6;
+  padding-left: 18px;
+}
+
+.no-rebuttal-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 10px 16px;
+  background: #FAFAFA;
+  border-top: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════
    내 상황 callout (user_impact)
 ═══════════════════════════════════════════ */
 .user-impact-box {
