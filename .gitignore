@@ -17,3 +17,10 @@ crawler.log
 
 # OS
 .DS_Store
+
+# 런타임 캐시 (서버 재시작 시 재생성)
+web/compare_cache.json
+
+# SQLite WAL 임시 파일
+*.db-shm
+*.db-wal

@@ -19,6 +19,57 @@ _index_html = os.path.join(_web_dir, "templates", "index.html")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# topic별 compare 결과 캐시 — 파일로 영속화
+_CACHE_FILE = os.path.join(_web_dir, "compare_cache.json")
+_compare_cache: dict = {}
+
+
+def _load_cache():
+    global _compare_cache
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                _compare_cache = json.load(f)
+        except Exception:
+            _compare_cache = {}
+
+
+def _save_cache():
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_compare_cache, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _get_topic_latest_created_at(topic: str):
+    """DB에서 해당 topic(fallback 포함)의 가장 최신 created_at 반환."""
+    conn = get_db()
+    row = conn.execute("""
+        SELECT MAX(s.created_at) as latest
+        FROM statements s
+        JOIN candidates c ON s.candidate_id = c.id
+        WHERE s.topic_normalized = ?
+           OR s.content LIKE ?
+           OR s.summary LIKE ?
+    """, (topic, f"%{topic}%", f"%{topic}%")).fetchone()
+    conn.close()
+    return row["latest"] if row else None
+
+
+def _is_cache_valid(topic: str) -> bool:
+    """캐시가 존재하고 DB 최신 데이터보다 오래되지 않았으면 True."""
+    entry = _compare_cache.get(topic)
+    if not entry or "_cached_at" not in entry:
+        return False
+    db_latest = _get_topic_latest_created_at(topic)
+    if db_latest is None:
+        return True
+    return entry["_cached_at"] >= db_latest
+
+
+_load_cache()
+
 TOPICS = [
     "주택/부동산", "교통/인프라", "경제/일자리", "교육",
     "환경/기후", "복지", "안전", "행정/거버넌스",
@@ -89,7 +140,7 @@ def get_statements_for_topic(topic: str) -> dict:
                s.source_name, s.source_url, s.date, c.name
         FROM statements s
         JOIN candidates c ON s.candidate_id = c.id
-        WHERE s.topic = ?
+        WHERE s.topic_normalized = ?
         ORDER BY c.number,
                  CASE s.source_type
                      WHEN '공약집'   THEN 1
@@ -103,9 +154,8 @@ def get_statements_for_topic(topic: str) -> dict:
                  END,
                  s.date DESC
     """, (topic,)).fetchall()
-    conn.close()
-    # 언론/실적/유튜브처럼 여러 후보가 섞이는 source는 후보 이름 언급 시에만 포함
-    MIXED_SOURCES = {"언론", "실적", "유튜브"}
+
+    MIXED_SOURCES = {"언론", "실적"}
 
     result = {name: [] for name in CANDIDATE_ORDER}
     for row in rows:
@@ -115,20 +165,66 @@ def get_statements_for_topic(topic: str) -> dict:
         if source_type in MIXED_SOURCES:
             text = (d.get("summary") or "") + d["content"]
             if candidate_name not in text:
-                continue  # 본인 언급 없는 혼합 소스는 제외
+                continue
         result[candidate_name].append(d)
 
+    # 1차 조회 결과가 없는 후보에 대해 키워드 fallback 조회
+    for name in CANDIDATE_ORDER:
+        if result[name]:
+            continue
+        fallback_rows = conn.execute("""
+            SELECT s.title, s.content, s.summary, s.source_type,
+                   s.source_name, s.source_url, s.date, c.name
+            FROM statements s
+            JOIN candidates c ON s.candidate_id = c.id
+            WHERE c.name = ?
+              AND s.topic_normalized != '기타'
+              AND (s.content LIKE ? OR s.summary LIKE ?)
+            ORDER BY
+                 CASE s.source_type
+                     WHEN '공약집'   THEN 1
+                     WHEN '선거공보' THEN 2
+                     WHEN '당홈페이지' THEN 3
+                     WHEN '토론발언' THEN 4
+                     WHEN '언론'     THEN 5
+                     WHEN '실적'     THEN 6
+                     WHEN '유튜브'   THEN 7
+                     ELSE 8
+                 END,
+                 s.date DESC
+            LIMIT 10
+        """, (name, f"%{topic}%", f"%{topic}%")).fetchall()
+
+        seen_titles = set()
+        for row in fallback_rows:
+            d = dict(row)
+            title_key = (d.get("title") or "")[:50]
+            if title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            d["_fallback"] = True
+            result[name].append(d)
+            if len(result[name]) >= 5:
+                break
+
+    conn.close()
     return result
 
 
 def extract_json(text: str) -> dict:
     match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1))
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    raise ValueError("JSON not found in response")
+    raw = match.group(1) if match else None
+    if raw is None:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if not match:
+            raise ValueError("JSON not found in response")
+        raw = match.group()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # JSON 문자열 내 리터럴 개행문자를 이스케이프 후 재시도
+        cleaned = re.sub(r'(?<!\\)\n', ' ', raw)
+        return json.loads(cleaned)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -216,9 +312,9 @@ async def recommend(request: Request):
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
-            system="당신은 서울시장 선거 정책 전문가입니다. 유권자 프로필을 분석해 관련성 높은 정책 분야를 추천합니다. JSON만 출력하세요.",
+            system=[{"type": "text", "text": "당신은 서울시장 선거 정책 전문가입니다. 유권자 프로필을 분석해 관련성 높은 정책 분야를 추천합니다. JSON만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}]
         )
         return extract_json(msg.content[0].text)
@@ -243,15 +339,17 @@ async def compare(request: Request):
         if stmts:
             has_any_data = True
             lines = []
+            has_fallback = any(s.get("_fallback") for s in stmts)
             for s in stmts:
                 raw_text = s.get("summary") or s["content"][:400]
-                # JSON 출력 오염 방지: 큰따옴표·역슬래시·제어문자 제거
-                clean_text = raw_text.replace('"', "'").replace('\\', ' ').replace('\r', ' ')
+                clean_text = raw_text.replace('"', "'").replace('\\', ' ').replace('\r', ' ').replace('\n', ' ')
                 src = s.get("source_name") or s.get("source_type", "")
-                lines.append(f"• {clean_text}  [{src}]")
-            candidate_blocks.append(
-                f"[{name} / {CANDIDATE_INFO[name]['party']}]\n" + "\n".join(lines)
-            )
+                fallback_label = " [타 분야 발언 중 관련 언급]" if s.get("_fallback") else ""
+                lines.append(f"• {clean_text}  [{src}]{fallback_label}")
+            header = f"[{name} / {CANDIDATE_INFO[name]['party']}]"
+            if has_fallback:
+                header += "\n(주의: 전담 공약 없음. 타 분야 발언 중 관련 언급만 존재)"
+            candidate_blocks.append(header + "\n" + "\n".join(lines))
         else:
             candidate_blocks.append(
                 f"[{name} / {CANDIDATE_INFO[name]['party']}]\n(수집된 공식 입장 없음)"
@@ -285,12 +383,14 @@ async def compare(request: Request):
         profile_lines.append(f"- 추가 상황: {freetext}")
     profile_context = ("\n[유권자 프로필]\n" + "\n".join(profile_lines) + "\n") if profile_lines else ""
 
+    # 프로필 독립적인 분석 프롬프트 (캐시 대상)
     prompt = f"""[{topic}] 분야에 대한 서울시장 후보 3인의 공식 입장입니다.
-{profile_context}
 {input_text}
 
 분석 지침:
 1. 공식 입장이 없는 후보: has_data=false, stance="수집된 공식 입장이 없습니다." (절대 추측 금지)
+   단, "(주의: 전담 공약 없음. 타 분야 발언 중 관련 언급만 존재)" 표시된 후보는 has_data=true로 하되,
+   stance 첫 문장을 반드시 "별도 전담 공약은 없으나,"로 시작하고 관련 언급 내용을 요약하세요.
 2. 입장 있는 후보 stance: 2-3문장 핵심 요약
 3. debate: 입장 있는 후보 각각에 대해, 상대 후보(입장 있는 경우에만)가 논리적으로 어떻게 반박할지 작성.
    - candidate: 주장하는 후보명
@@ -300,7 +400,6 @@ async def compare(request: Request):
      - angle: 반박 각도/관점 레이블 (3-6자, 예: "실효성 의문", "우선순위 오류", "공급 부족 간과")
      - text: 반박 내용 1-2문장 (실제 정책 입장 차이에 근거, 추측 금지)
 4. clash_summary: 전체 대립 구도 요약 2-3문장.
-5. user_impact: 유권자 프로필이 있을 경우, 이 유권자의 구체적 상황에서 두 후보의 차이가 실제로 어떤 의미인지 2문장으로 서술. 추상적 설명 금지, 반드시 프로필 내용을 언급할 것. 프로필 없으면 빈 문자열 "".
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -319,33 +418,229 @@ async def compare(request: Request):
       ]
     }}
   ],
-  "clash_summary": "...",
-  "user_impact": "..."
+  "clash_summary": "..."
+}}"""
+
+    if _is_cache_valid(topic):
+        result = {k: v for k, v in _compare_cache[topic].items() if not k.startswith("_")}
+    else:
+        try:
+            msg = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4000,
+                system=[{"type": "text", "text": "당신은 서울시장 선거 정책 분석가입니다. 후보 입장을 객관적으로 비교합니다. 공식 입장 없는 후보는 절대 추측 금지. JSON만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            result = extract_json(msg.content[0].text)
+            result["sources"] = {}
+            for name in CANDIDATE_ORDER:
+                result["sources"][name] = [
+                    {
+                        "title": s.get("title") or "",
+                        "source_name": s.get("source_name") or "",
+                        "source_url": s.get("source_url") or "",
+                        "source_type": s.get("source_type") or "",
+                        "date": s.get("date") or "",
+                    }
+                    for s in statements[name][:8]
+                ]
+            from datetime import datetime, timezone
+            result["_cached_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            _compare_cache[topic] = dict(result)
+            _save_cache()
+            result = {k: v for k, v in result.items() if not k.startswith("_")}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # user_impact: 프로필이 있을 때만 매 요청마다 별도 생성 (캐시 제외)
+    result["user_impact"] = ""
+    if profile_lines:
+        stances_text = "\n".join(
+            f"- {c['name']}: {c['stance']}"
+            for c in result.get("candidates", [])
+            if c.get("has_data")
+        )
+        impact_prompt = f"""[{topic}] 분야 서울시장 후보 입장 요약:
+{stances_text}
+
+[유권자 프로필]
+{chr(10).join(profile_lines)}
+
+이 유권자의 구체적 상황에서 후보들의 정책 차이가 실제로 어떤 의미인지 2문장으로 서술하세요.
+추상적 설명 금지, 반드시 프로필 내용(연령대·주거·직업 등)을 직접 언급할 것.
+JSON: {{"user_impact": "..."}}"""
+        try:
+            msg2 = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                system=[{"type": "text", "text": "서울시장 선거 정책 분석가. JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": impact_prompt}]
+            )
+            result["user_impact"] = extract_json(msg2.content[0].text).get("user_impact", "")
+        except Exception:
+            pass
+
+    return result
+
+
+@app.post("/api/debate")
+async def debate(request: Request):
+    """
+    후보 AI 에이전트 간 3라운드 토론.
+    유저가 입장을 선언하면, 선택된 두 후보가 해당 주제로 3라운드 토론을 진행.
+    Round 1: candidate_a 주장 / Round 2: candidate_b 반박 / Round 3: candidate_a 재반박
+    """
+    body = await request.json()
+    topic = body.get("topic", "").strip()
+    candidate_a = body.get("candidate_a", "").strip()
+    candidate_b = body.get("candidate_b", "").strip()
+    user_claim = body.get("user_claim", "").strip()
+    profile = body.get("profile", {})
+
+    if not (topic and candidate_a and candidate_b and user_claim):
+        raise HTTPException(status_code=400, detail="topic, candidate_a, candidate_b, user_claim required")
+    if candidate_a not in CANDIDATE_INFO or candidate_b not in CANDIDATE_INFO:
+        raise HTTPException(status_code=400, detail="invalid candidate")
+    if candidate_a == candidate_b:
+        raise HTTPException(status_code=400, detail="두 후보가 같습니다")
+
+    statements = get_statements_for_topic(topic)
+
+    def build_context(name):
+        stmts = statements.get(name, [])[:8]
+        if not stmts:
+            return "(해당 분야 공식 입장 없음)"
+        return "\n".join(
+            f"- {s.get('summary') or s['content'][:300]}  [{s.get('source_name', '')}]"
+            for s in stmts
+        )
+
+    ctx_a = build_context(candidate_a)
+    ctx_b = build_context(candidate_b)
+    info_a = CANDIDATE_INFO[candidate_a]
+    info_b = CANDIDATE_INFO[candidate_b]
+
+    label_map = {"concern": "주요 걱정", "age": "연령대", "housing": "주거 형태",
+                 "employment": "고용 형태", "children": "자녀 상황", "commute": "이동 수단"}
+    profile_lines = []
+    for key, label in label_map.items():
+        val = profile.get(key)
+        if val:
+            profile_lines.append(f"- {label}: {val if isinstance(val, str) else ', '.join(val)}")
+    profile_context = ("\n[유권자 프로필]\n" + "\n".join(profile_lines)) if profile_lines else ""
+
+    prompt = f"""다음은 서울시장 선거 [{topic}] 분야에 대한 후보 간 3라운드 AI 토론입니다.
+
+[유권자 입장]
+"{user_claim}"
+{profile_context}
+
+[{candidate_a} / {info_a['party']}] 공식 입장:
+{ctx_a}
+
+[{candidate_b} / {info_b['party']}] 공식 입장:
+{ctx_b}
+
+토론 규칙:
+1. 각 후보는 위에 제시된 공식 입장과 정책 자료에만 근거하여 발언합니다.
+2. 공식 입장이 없으면 "이 부분은 공식 입장을 확인하기 어렵습니다"라고 표현합니다.
+3. 각 라운드 발언은 150자 이내, 상대 발언을 직접 언급하며 반박합니다.
+4. 유권자 프로필이 있으면 최종 라운드에서 해당 상황에 어떤 의미인지 언급합니다.
+5. 1인칭(저는, 우리는)으로 후보 입장에서 발언합니다.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "rounds": [
+    {{"round": 1, "candidate": "{candidate_a}", "role": "주장", "text": "..."}},
+    {{"round": 2, "candidate": "{candidate_b}", "role": "반박", "text": "..."}},
+    {{"round": 3, "candidate": "{candidate_a}", "role": "재반박", "text": "..."}}
+  ]
 }}"""
 
     try:
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
-            system="당신은 서울시장 선거 정책 분석가입니다. 후보 입장을 객관적으로 비교합니다. 공식 입장 없는 후보는 절대 추측 금지. JSON만 출력하세요.",
+            max_tokens=2000,
+            system=[{"type": "text", "text": "당신은 서울시장 선거 AI 토론 진행 시스템입니다. 두 후보의 공식 입장을 바탕으로 실제 토론처럼 3라운드 발언을 생성합니다. 공식 입장 없는 내용은 추측 금지. JSON만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}]
         )
-        raw = msg.content[0].text
-        result = extract_json(raw)
+        return extract_json(msg.content[0].text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        result["sources"] = {}
-        for name in CANDIDATE_ORDER:
-            result["sources"][name] = [
-                {
-                    "title": s.get("title") or "",
-                    "source_name": s.get("source_name") or "",
-                    "source_url": s.get("source_url") or "",
-                    "source_type": s.get("source_type") or "",
-                    "date": s.get("date") or "",
-                }
-                for s in statements[name][:8]
-            ]
-        return result
+
+@app.post("/api/debate/extend")
+async def debate_extend(request: Request):
+    """
+    기존 토론에 1라운드 추가.
+    이전 라운드 전체를 컨텍스트로 받아 다음 발언자가 이어서 반박.
+    """
+    body = await request.json()
+    topic = body.get("topic", "").strip()
+    candidate_a = body.get("candidate_a", "").strip()
+    candidate_b = body.get("candidate_b", "").strip()
+    user_claim = body.get("user_claim", "").strip()
+    previous_rounds = body.get("previous_rounds", [])
+
+    if not (topic and candidate_a and candidate_b and previous_rounds):
+        raise HTTPException(status_code=400, detail="topic, candidate_a, candidate_b, previous_rounds required")
+
+    statements = get_statements_for_topic(topic)
+
+    def build_context(name):
+        stmts = statements.get(name, [])[:8]
+        if not stmts:
+            return "(해당 분야 공식 입장 없음)"
+        return "\n".join(
+            f"- {s.get('summary') or s['content'][:300]}  [{s.get('source_name', '')}]"
+            for s in stmts
+        )
+
+    ctx_a = build_context(candidate_a)
+    ctx_b = build_context(candidate_b)
+    info_a = CANDIDATE_INFO[candidate_a]
+    info_b = CANDIDATE_INFO[candidate_b]
+
+    next_round_num = len(previous_rounds) + 1
+    # 마지막 발언자 기준으로 다음 발언자 결정
+    last_speaker = previous_rounds[-1].get("candidate", candidate_a)
+    next_speaker = candidate_b if last_speaker == candidate_a else candidate_a
+    next_info = CANDIDATE_INFO[next_speaker]
+
+    history_text = "\n".join(
+        f"Round {r['round']} [{r['candidate']} / {r['role']}]: {r['text']}"
+        for r in previous_rounds
+    )
+
+    prompt = f"""다음은 [{topic}] 분야 서울시장 후보 토론의 지금까지 내용입니다.
+
+[유권자 입장]
+"{user_claim}"
+
+[{candidate_a} / {info_a['party']}] 공식 입장:
+{ctx_a}
+
+[{candidate_b} / {info_b['party']}] 공식 입장:
+{ctx_b}
+
+[지금까지 토론]
+{history_text}
+
+이제 {next_speaker}({next_info['party']})가 Round {next_round_num}에서 직전 발언에 반박합니다.
+- 공식 입장 자료에만 근거하고, 새로운 논점을 추가해 단순 반복이 되지 않도록 하세요.
+- 150자 이내, 1인칭으로 작성하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{"round": {next_round_num}, "candidate": "{next_speaker}", "role": "반박", "text": "..."}}"""
+
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            system=[{"type": "text", "text": "당신은 서울시장 선거 AI 토론 시스템입니다. 공식 입장 기반으로만 발언합니다. JSON만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return extract_json(msg.content[0].text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -399,7 +694,7 @@ async def agent_chat(request: Request):
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
-            system=system,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
         )
         return {"answer": msg.content[0].text}

@@ -1255,3 +1255,43 @@ textarea::placeholder { color: var(--text-muted); }
   .chat-answers[data-count="3"],
   .chat-answers[data-count="2"] { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════
+   AI 토론 패널 (기존 컴포넌트 재사용, 최소 추가)
+═══════════════════════════════════════════ */
+.live-debate-panel {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+/* debate-setup은 agent-input-area와 동일한 컨테이너를 쓰므로 간격만 추가 */
+.debate-setup { margin-top: 14px; gap: 12px; }
+
+/* 내 입장 입력은 agent-textarea 그대로 사용, 너비만 맞춤 */
+.debate-claim-input { width: 100%; box-sizing: border-box; }
+
+/* 라운드 카드는 rebuttal-card 그대로 사용, 상단 간격만 추가 */
+.debate-round-card { margin-top: 10px; }
+.debate-round-card:first-of-type { margin-top: 0; }
+
+/* 결과 영역 */
+.debate-result { margin-top: 16px; }
+
+/* 판정 영역은 user-impact-box 재사용 + textarea 추가 */
+.debate-verdict {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.debate-verdict .agent-textarea { margin-top: 10px; width: 100%; box-sizing: border-box; }
+
+.debate-verdict-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  margin-bottom: 0;
+}

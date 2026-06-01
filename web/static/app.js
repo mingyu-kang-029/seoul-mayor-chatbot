@@ -158,8 +158,8 @@ function renderResults() {
     list.appendChild(buildTopicCard(item, idx + 1));
   });
 
-  // 상위 2개 주제만 백그라운드 프리패치
-  state.recommendations.slice(0, 2).forEach(item => prefetchComparison(item.topic));
+  // 3개 전부 백그라운드 프리패치
+  state.recommendations.forEach(item => prefetchComparison(item.topic));
 }
 
 function prefetchComparison(topic) {
@@ -171,7 +171,18 @@ function prefetchComparison(topic) {
     body: JSON.stringify({ topic, profile: state.profile }),
   })
     .then(r => r.ok ? r.json() : Promise.reject())
-    .then(data => { state.comparisons[topic] = data; })
+    .then(data => {
+      state.comparisons[topic] = data;
+      // 이미 열려 있는 카드에 렌더링 (클릭 시 로딩 중이어서 return된 경우 처리)
+      const card = document.querySelector(`.topic-card[data-topic="${CSS.escape(topic)}"]`);
+      if (card) {
+        const content = card.querySelector('.topic-content');
+        const inner = card.querySelector('.topic-content-inner');
+        if (content && content.classList.contains('open') && inner && inner.children.length === 0) {
+          renderComparison(topic, inner, data);
+        }
+      }
+    })
     .catch(() => {})
     .finally(() => { state.loadingTopics.delete(topic); });
 }
@@ -325,7 +336,10 @@ function renderComparison(topic, container, data) {
     container.appendChild(buildSourceDrawer(sources));
   }
 
-  /* ── 4. 에이전트 채팅 패널 ── */
+  /* ── 4. AI 토론 패널 ── */
+  container.appendChild(buildLiveDebatePanel(topic, data));
+
+  /* ── 5. 에이전트 채팅 패널 ── */
   container.appendChild(buildAgentPanel(topic));
 }
 
@@ -541,6 +555,283 @@ function escapeHtml(str) {
 }
 
 /* ═══════════════════════════════════════════
+   AI 토론 패널 빌더
+═══════════════════════════════════════════ */
+function buildLiveDebatePanel(topic, compareData) {
+  const candidatesWithData = (compareData.candidates || [])
+    .filter(c => c.has_data)
+    .map(c => c.name);
+
+  const panel = document.createElement('div');
+  panel.className = 'live-debate-panel';
+
+  const header = document.createElement('div');
+  header.className = 'agent-panel-header';
+  header.innerHTML = `
+    <span class="subsection-label">AI 토론</span>
+    <span class="agent-no-learn-badge">3라운드 · 공식 입장 기반</span>
+  `;
+  panel.appendChild(header);
+
+  if (candidatesWithData.length < 2) {
+    const note = document.createElement('p');
+    note.className = 'no-clash-note';
+    note.textContent = '토론을 진행하려면 공식 입장이 있는 후보가 2명 이상 필요합니다.';
+    panel.appendChild(note);
+    return panel;
+  }
+
+  // 설정 박스 — agent-input-area와 같은 컨테이너 스타일
+  const setupEl = document.createElement('div');
+  setupEl.className = 'agent-input-area debate-setup';
+
+  // 내 입장 입력
+  const claimRow = document.createElement('div');
+  claimRow.innerHTML = `
+    <div class="agent-target-row" style="margin-bottom:8px">
+      <span class="agent-target-label">내 입장</span>
+    </div>
+    <textarea class="agent-textarea debate-claim-input" rows="2"
+      placeholder="예: 임대주택 확대가 집값 안정에 효과적이라고 생각한다"></textarea>
+  `;
+  setupEl.appendChild(claimRow);
+
+  // 후보 선택 — chip 방식
+  // 각 그룹에서 하나씩 선택, 기본값 첫번째 vs 두번째
+  const selA = { value: candidatesWithData[0] };
+  const selB = { value: candidatesWithData[1] };
+
+  function buildCandChips(sel, otherSel, groupClass) {
+    const row = document.createElement('div');
+    row.className = 'agent-target-row';
+    row.innerHTML = `<span class="agent-target-label">${groupClass === 'cand-a' ? '주장' : '반박'}</span>`;
+    const chips = document.createElement('div');
+    chips.className = 'agent-target-chips';
+    candidatesWithData.forEach(name => {
+      const info = getCandInfo(name);
+      const pc = PARTY_COLORS[info.party] || {};
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'agent-target-chip debate-cand-chip' + (name === sel.value ? ' selected' : '');
+      btn.dataset.name = name;
+      btn.innerHTML = `<span style="color:${pc.label||'inherit'}">${name}</span>`;
+      btn.addEventListener('click', () => {
+        sel.value = name;
+        chips.querySelectorAll('.debate-cand-chip').forEach(c => c.classList.remove('selected'));
+        btn.classList.add('selected');
+      });
+      chips.appendChild(btn);
+    });
+    row.appendChild(chips);
+    return row;
+  }
+
+  setupEl.appendChild(buildCandChips(selA, selB, 'cand-a'));
+  setupEl.appendChild(buildCandChips(selB, selA, 'cand-b'));
+
+  // 시작 버튼 — agent-send-btn 스타일 재사용
+  const inputRow = document.createElement('div');
+  inputRow.className = 'agent-input-row';
+  inputRow.style.justifyContent = 'flex-end';
+  const startBtn = document.createElement('button');
+  startBtn.type = 'button';
+  startBtn.className = 'agent-send-btn';
+  startBtn.textContent = '토론 시작';
+  inputRow.appendChild(startBtn);
+  setupEl.appendChild(inputRow);
+
+  panel.appendChild(setupEl);
+
+  // 결과 영역
+  const resultEl = document.createElement('div');
+  resultEl.className = 'debate-result';
+  resultEl.style.display = 'none';
+  panel.appendChild(resultEl);
+
+  // 판정 영역
+  const verdictEl = document.createElement('div');
+  verdictEl.className = 'debate-verdict';
+  verdictEl.style.display = 'none';
+
+  const verdictTextarea = document.createElement('textarea');
+  verdictTextarea.className = 'agent-textarea debate-claim-input';
+  verdictTextarea.rows = 2;
+  verdictTextarea.placeholder = '예: 오세훈 후보 — 공급 확대의 구체적 수치가 더 설득력 있었다';
+
+  const verdictConfirmRow = document.createElement('div');
+  verdictConfirmRow.className = 'agent-input-row';
+  verdictConfirmRow.style.justifyContent = 'space-between';
+  verdictConfirmRow.style.alignItems = 'center';
+  verdictConfirmRow.innerHTML = `<p class="debate-verdict-hint" style="margin:0">직접 정리하면 투표 판단이 더 선명해집니다.</p>`;
+
+  const verdictSaveBtn = document.createElement('button');
+  verdictSaveBtn.type = 'button';
+  verdictSaveBtn.className = 'agent-send-btn';
+  verdictSaveBtn.textContent = '기록하기';
+  verdictConfirmRow.appendChild(verdictSaveBtn);
+
+  const verdictDone = document.createElement('div');
+  verdictDone.className = 'user-impact-box';
+  verdictDone.style.display = 'none';
+  verdictDone.innerHTML = `<div class="user-impact-label">내 판정</div><p class="user-impact-text"></p>`;
+
+  verdictEl.innerHTML = `<div class="user-impact-label" style="margin-bottom:10px">어느 쪽 논리가 더 설득력 있었나요?</div>`;
+  verdictEl.appendChild(verdictTextarea);
+  verdictEl.appendChild(verdictConfirmRow);
+  verdictEl.appendChild(verdictDone);
+
+  verdictSaveBtn.addEventListener('click', () => {
+    const text = verdictTextarea.value.trim();
+    if (!text) { verdictTextarea.focus(); return; }
+    verdictTextarea.style.display = 'none';
+    verdictConfirmRow.style.display = 'none';
+    verdictDone.style.display = 'block';
+    verdictDone.querySelector('.user-impact-text').textContent = text;
+  });
+
+  panel.appendChild(verdictEl);
+
+  startBtn.addEventListener('click', async () => {
+    const userClaim = setupEl.querySelector('.debate-claim-input').value.trim();
+    if (!userClaim) { setupEl.querySelector('.debate-claim-input').focus(); return; }
+    if (selA.value === selB.value) { alert('서로 다른 후보를 선택해 주세요.'); return; }
+
+    startBtn.disabled = true;
+    startBtn.textContent = '생성 중...';
+    resultEl.style.display = 'block';
+    verdictEl.style.display = 'none';
+    resultEl.innerHTML = `
+      <div class="compare-loading">
+        <span class="mini-spinner"></span>
+        후보들이 토론을 준비하는 중...
+      </div>`;
+
+    try {
+      const res = await fetch('/api/debate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic,
+          candidate_a: selA.value,
+          candidate_b: selB.value,
+          user_claim: userClaim,
+          profile: state.profile,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const rounds = data.rounds || [];
+      renderDebateRounds(resultEl, rounds, userClaim, {
+        topic, candA: selA.value, candB: selB.value, userClaim,
+      }, verdictEl);
+      verdictEl.style.display = 'block';
+    } catch {
+      resultEl.innerHTML = `<p class="error-msg">토론 생성 중 오류가 발생했습니다. 다시 시도해 주세요.</p>`;
+    } finally {
+      startBtn.disabled = false;
+      startBtn.textContent = '다시 토론하기';
+    }
+  });
+
+  return panel;
+}
+
+function renderDebateRounds(container, rounds, userClaim, debateCtx, verdictEl) {
+  container.innerHTML = '';
+
+  // 유저 입장
+  const claimBanner = document.createElement('div');
+  claimBanner.className = 'user-impact-box';
+  claimBanner.innerHTML = `
+    <div class="user-impact-label">내 입장</div>
+    <p class="user-impact-text">${escapeHtml(userClaim)}</p>
+  `;
+  container.appendChild(claimBanner);
+
+  // 라운드 카드들을 담을 래퍼 (추가 라운드 append 용)
+  const roundsWrap = document.createElement('div');
+  container.appendChild(roundsWrap);
+
+  function appendRound(round) {
+    const info = getCandInfo(round.candidate);
+    const pc = PARTY_COLORS[info.party] || {};
+    const el = document.createElement('div');
+    el.className = 'rebuttal-card debate-round-card';
+    el.innerHTML = `
+      <div class="rebuttal-from" style="margin-bottom:8px">
+        <span class="rebuttal-angle">${round.role} R${round.round}</span>
+        <span class="rebuttal-name" style="color:${pc.label||'inherit'}">${round.candidate}</span>
+        <span style="font-size:11px;color:var(--text-muted)">${info.party||''}</span>
+      </div>
+      <p class="rebuttal-text">${escapeHtml(round.text)}</p>
+    `;
+    roundsWrap.appendChild(el);
+  }
+
+  rounds.forEach(appendRound);
+
+  // "1라운드 더" 버튼 (최대 5라운드까지)
+  if (!debateCtx) return;
+
+  const extendRow = document.createElement('div');
+  extendRow.className = 'agent-input-row';
+  extendRow.style.justifyContent = 'flex-end';
+  extendRow.style.marginTop = '10px';
+
+  const extendBtn = document.createElement('button');
+  extendBtn.type = 'button';
+  extendBtn.className = 'agent-target-chip';
+  extendBtn.textContent = '1라운드 더 →';
+  extendRow.appendChild(extendBtn);
+  container.appendChild(extendRow);
+
+  let currentRounds = [...rounds];
+
+  extendBtn.addEventListener('click', async () => {
+    if (currentRounds.length >= 5) {
+      extendBtn.textContent = '최대 5라운드까지 가능합니다';
+      extendBtn.disabled = true;
+      return;
+    }
+
+    extendBtn.disabled = true;
+    extendBtn.textContent = '생성 중...';
+    if (verdictEl) verdictEl.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/debate/extend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: debateCtx.topic,
+          candidate_a: debateCtx.candA,
+          candidate_b: debateCtx.candB,
+          user_claim: debateCtx.userClaim,
+          previous_rounds: currentRounds,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const newRound = await res.json();
+      currentRounds.push(newRound);
+      appendRound(newRound);
+
+      if (currentRounds.length >= 5) {
+        extendBtn.textContent = '5라운드 완료';
+        extendBtn.disabled = true;
+      } else {
+        extendBtn.disabled = false;
+        extendBtn.textContent = '1라운드 더 →';
+      }
+    } catch {
+      extendBtn.disabled = false;
+      extendBtn.textContent = '다시 시도';
+    } finally {
+      if (verdictEl) verdictEl.style.display = 'block';
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════
    에이전트 채팅 패널 빌더
 ═══════════════════════════════════════════ */
 function buildAgentPanel(topic) {
@@ -690,7 +981,8 @@ async function askAgents(topic, question, targets, historyEl) {
       ];
 
       cardMap[name].querySelector('.chat-answer-text').textContent = answer;
-    } catch {
+    } catch (err) {
+      console.error(`[agent] ${name} 응답 실패:`, err);
       cardMap[name].querySelector('.chat-answer-text').innerHTML =
         '<span class="agent-error">답변을 불러오지 못했습니다.</span>';
     }

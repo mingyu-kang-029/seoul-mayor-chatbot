@@ -143,6 +143,39 @@ def insert_statement(
             raise  # 3회 실패 시 에러 전파
 
 
+def get_last_crawl_date(candidate_name: str, source_type: str) -> str | None:
+    """
+    특정 후보 + 소스 타입의 가장 최근 저장 날짜 반환 (YYYY-MM-DD).
+    없으면 None 반환.
+    증분 크롤링에서 '여기 이후부터만 수집' 기준으로 사용.
+    """
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT MAX(s.date) FROM statements s
+        JOIN candidates c ON s.candidate_id = c.id
+        WHERE c.name = ? AND s.source_type = ?
+          AND s.date IS NOT NULL AND s.date != ''
+    """, (candidate_name, source_type)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def get_known_source_urls(candidate_name: str, source_type: str) -> set:
+    """
+    특정 후보 + 소스 타입의 이미 저장된 source_url 집합 반환.
+    증분 크롤링에서 중복 URL 빠르게 건너뛸 때 사용.
+    """
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT DISTINCT s.source_url FROM statements s
+        JOIN candidates c ON s.candidate_id = c.id
+        WHERE c.name = ? AND s.source_type = ?
+          AND s.source_url IS NOT NULL
+    """, (candidate_name, source_type)).fetchall()
+    conn.close()
+    return {row[0] for row in rows}
+
+
 def get_stats() -> dict:
     """후보별 소스 타입별 수집 현황"""
     conn = get_connection()

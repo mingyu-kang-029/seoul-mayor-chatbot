@@ -47,7 +47,7 @@ def classify_topic(title: str, content: str) -> tuple[str, str, str]:
     topics_str = " | ".join(TOPICS)
     client = _get_client()
     resp = client.messages.create(
-        model="claude-haiku-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=300,
         messages=[{
             "role": "user",
@@ -114,7 +114,7 @@ def extract_from_pdf_text(pdf_text: str, candidate_name: str) -> list[dict]:
     # 최대 20000자 (약 5~6청크)
     for i, chunk in enumerate([pdf_text[j:j+4000] for j in range(0, min(len(pdf_text), 20000), 4000)]):
         resp = client.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             messages=[{
                 "role": "user",
@@ -145,7 +145,7 @@ def extract_quotes_from_article(article_text: str, candidate_name: str) -> list[
 
     client = _get_client()
     resp = client.messages.create(
-        model="claude-haiku-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=1000,
         messages=[{
             "role": "user",
